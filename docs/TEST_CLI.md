@@ -79,7 +79,7 @@ Write current net classes back with selected merge mode:
 cargo run --features blocking --bin kicad-ipc-cli -- set-net-classes --merge-mode merge
 ```
 
-List text variables for current board document:
+List text variables for current project:
 
 ```bash
 cargo run --features blocking --bin kicad-ipc-cli -- text-variables
@@ -400,7 +400,7 @@ Notes:
 - Report output is intentionally capped for very large boards to avoid multi-GB files.
 - For full raw payloads, use targeted commands such as `items-raw --debug`, `pad-shape-polygon --debug`, and `padstack-presence --debug`.
 
-Get current project path (derived from open PCB docs):
+Get current project path (from open PCB docs, or `KIPRJMOD` when `GetOpenDocuments` is unavailable):
 
 ```bash
 cargo run --features blocking --bin kicad-ipc-cli -- project-path
