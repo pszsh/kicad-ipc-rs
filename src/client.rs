@@ -40,6 +40,7 @@ const CMD_GET_ACTIVE_LAYER: &str = "kiapi.board.commands.GetActiveLayer";
 const CMD_SET_ACTIVE_LAYER: &str = "kiapi.board.commands.SetActiveLayer";
 const CMD_GET_VISIBLE_LAYERS: &str = "kiapi.board.commands.GetVisibleLayers";
 const CMD_SET_VISIBLE_LAYERS: &str = "kiapi.board.commands.SetVisibleLayers";
+const CMD_GET_BOARD_LAYER_NAME: &str = "kiapi.board.commands.GetBoardLayerName";
 const CMD_GET_BOARD_ORIGIN: &str = "kiapi.board.commands.GetBoardOrigin";
 const CMD_SET_BOARD_ORIGIN: &str = "kiapi.board.commands.SetBoardOrigin";
 const CMD_GET_BOARD_STACKUP: &str = "kiapi.board.commands.GetBoardStackup";
@@ -95,6 +96,7 @@ const RES_GET_NETS: &str = "kiapi.board.commands.NetsResponse";
 const RES_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.BoardEnabledLayersResponse";
 const RES_BOARD_LAYER_RESPONSE: &str = "kiapi.board.commands.BoardLayerResponse";
 const RES_BOARD_LAYERS: &str = "kiapi.board.commands.BoardLayers";
+const RES_BOARD_LAYER_NAME_RESPONSE: &str = "kiapi.board.commands.BoardLayerNameResponse";
 const RES_BOARD_STACKUP_RESPONSE: &str = "kiapi.board.commands.BoardStackupResponse";
 const RES_GRAPHICS_DEFAULTS_RESPONSE: &str = "kiapi.board.commands.GraphicsDefaultsResponse";
 const RES_BOARD_EDITOR_APPEARANCE_SETTINGS: &str =
@@ -988,6 +990,22 @@ impl KiCadClient {
         self.send_command(envelope::pack_any(&command, CMD_SET_VISIBLE_LAYERS))
             .await?;
         Ok(())
+    }
+
+    pub async fn get_board_layer_name(&self, layer_id: i32) -> Result<String, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::GetBoardLayerName {
+            board: Some(board),
+            layer: layer_id,
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_BOARD_LAYER_NAME))
+            .await?;
+
+        let payload: board_commands::BoardLayerNameResponse =
+            envelope::unpack_any(&response, RES_BOARD_LAYER_NAME_RESPONSE)?;
+        Ok(payload.name)
     }
 
     pub async fn get_board_origin(&self, kind: BoardOriginKind) -> Result<Vector2Nm, KiCadError> {
@@ -4717,6 +4735,58 @@ mod tests {
         assert_eq!(
             payload.type_url,
             super::envelope::type_url("google.protobuf.Empty")
+        );
+    }
+
+    #[test]
+    fn get_board_layer_name_response_decodes_expected_type_url() {
+        let payload = prost_types::Any {
+            type_url: super::envelope::type_url("kiapi.board.commands.BoardLayerNameResponse"),
+            value: crate::proto::kiapi::board::commands::BoardLayerNameResponse {
+                name: "In1.Cu".to_string(),
+            }
+            .encode_to_vec(),
+        };
+
+        let decoded: crate::proto::kiapi::board::commands::BoardLayerNameResponse =
+            super::decode_any(&payload, super::RES_BOARD_LAYER_NAME_RESPONSE)
+                .expect("layer-name response should decode");
+
+        assert_eq!(decoded.name, "In1.Cu");
+    }
+
+    #[test]
+    fn get_board_layer_name_response_rejects_wrong_type_url() {
+        let payload = prost_types::Any {
+            type_url: super::envelope::type_url("kiapi.board.commands.BoardLayerResponse"),
+            value: crate::proto::kiapi::board::commands::BoardLayerNameResponse {
+                name: "F.Cu".to_string(),
+            }
+            .encode_to_vec(),
+        };
+
+        let err =
+            super::decode_any::<crate::proto::kiapi::board::commands::BoardLayerNameResponse>(
+                &payload,
+                super::RES_BOARD_LAYER_NAME_RESPONSE,
+            )
+            .expect_err("mismatched type_url should fail");
+
+        assert!(matches!(err, KiCadError::UnexpectedPayloadType { .. }));
+    }
+
+    #[test]
+    fn get_board_layer_name_command_type_url_matches_proto_name() {
+        let command = crate::proto::kiapi::board::commands::GetBoardLayerName {
+            board: None,
+            layer: crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+        };
+
+        let any = super::envelope::pack_any(&command, super::CMD_GET_BOARD_LAYER_NAME);
+
+        assert_eq!(
+            any.type_url,
+            super::envelope::type_url("kiapi.board.commands.GetBoardLayerName")
         );
     }
 
