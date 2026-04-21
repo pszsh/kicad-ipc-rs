@@ -194,4 +194,13 @@ impl KiCadClient {
         let items = self.get_items_by_id_raw(item_ids).await?;
         decode_pcb_items(items)
     }
+
+    /// Fetches items by id and wraps each payload in an [`crate::model::item::Item`].
+    pub async fn get_items_by_id_as_items(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<Vec<crate::model::item::Item>, KiCadError> {
+        let items = self.get_items_by_id_raw(item_ids).await?;
+        Ok(items.into_iter().map(crate::model::item::Item::from_any).collect())
+    }
 }

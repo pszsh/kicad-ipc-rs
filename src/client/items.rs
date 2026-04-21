@@ -157,6 +157,16 @@ impl KiCadClient {
             .collect()
     }
 
+    /// Updates existing items via [`crate::model::item::Item`] wrappers.
+    pub async fn update_items_from_items(
+        &self,
+        items: Vec<crate::model::item::Item>,
+    ) -> Result<Vec<crate::model::item::Item>, KiCadError> {
+        let anys: Vec<prost_types::Any> = items.into_iter().map(|i| i.into_any()).collect();
+        let updated = self.update_items(anys).await?;
+        Ok(updated.into_iter().map(crate::model::item::Item::from_any).collect())
+    }
+
     /// Deletes items and returns the raw delete-items payload.
     pub async fn delete_items_raw(
         &self,
