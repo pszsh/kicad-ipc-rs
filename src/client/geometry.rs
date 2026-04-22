@@ -34,6 +34,26 @@ impl KiCadClient {
         let _ = response_payload_as_any(response, RES_PROTOBUF_EMPTY)?;
         Ok(())
     }
+
+    /// Rebuilds fill geometry for every zone on the current board.
+    pub async fn refill_all_zones(&self) -> Result<(), KiCadError> {
+        let zones = self.get_all_pcb_items_raw().await?;
+        let mut ids: Vec<String> = Vec::new();
+        for (_type_code, items) in zones {
+            for any in items {
+                if any.type_url.ends_with("kiapi.board.types.Zone") {
+                    let wrapper = crate::model::item::Item::from_any(any);
+                    if let Ok(Some(id)) = wrapper.kiid() {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        if ids.is_empty() {
+            return Ok(());
+        }
+        self.refill_zones(ids).await
+    }
     /// Returns pad polygon responses as raw protobuf payloads.
     pub async fn get_pad_shape_as_polygon_raw(
         &self,

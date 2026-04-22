@@ -244,6 +244,81 @@ impl Item {
         }
     }
 
+    /// Snaps all positional coordinates of this item to the nearest multiple of the grid.
+    ///
+    /// `grid_x_nm` / `grid_y_nm` are the grid step in nanometres. `grid_x_nm` / `grid_y_nm` of
+    /// `0` or below leaves that axis unchanged.
+    ///
+    /// Returns `Ok(true)` if the item's bytes were rewritten. Unsupported kinds (Zone, Dimension,
+    /// Field, Group, ReferenceImage, Unknown) return `Ok(false)`.
+    pub fn snap_position(&mut self, grid_x_nm: i64, grid_y_nm: i64) -> Result<bool, KiCadError> {
+        let gx = grid_x_nm;
+        let gy = grid_y_nm;
+        let value = self.raw.value.as_slice();
+        let (new_bytes, mutated) = match self.kind() {
+            ItemKind::Track => {
+                let mut m = bt::Track::decode(value).map_err(decode_err)?;
+                snap_opt_v2(&mut m.start, gx, gy);
+                snap_opt_v2(&mut m.end, gx, gy);
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::Arc => {
+                let mut m = bt::Arc::decode(value).map_err(decode_err)?;
+                snap_opt_v2(&mut m.start, gx, gy);
+                snap_opt_v2(&mut m.mid, gx, gy);
+                snap_opt_v2(&mut m.end, gx, gy);
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::Via => {
+                let mut m = bt::Via::decode(value).map_err(decode_err)?;
+                snap_opt_v2(&mut m.position, gx, gy);
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::FootprintInstance => {
+                let mut m = bt::FootprintInstance::decode(value).map_err(decode_err)?;
+                snap_opt_v2(&mut m.position, gx, gy);
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::Pad => {
+                let mut m = bt::Pad::decode(value).map_err(decode_err)?;
+                snap_opt_v2(&mut m.position, gx, gy);
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::BoardGraphicShape => {
+                let mut m = bt::BoardGraphicShape::decode(value).map_err(decode_err)?;
+                if let Some(shape) = m.shape.as_mut() {
+                    snap_graphic_shape(shape, gx, gy);
+                }
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::BoardText => {
+                let mut m = bt::BoardText::decode(value).map_err(decode_err)?;
+                if let Some(t) = m.text.as_mut() {
+                    snap_opt_v2(&mut t.position, gx, gy);
+                }
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::BoardTextBox => {
+                let mut m = bt::BoardTextBox::decode(value).map_err(decode_err)?;
+                if let Some(tb) = m.textbox.as_mut() {
+                    snap_opt_v2(&mut tb.top_left, gx, gy);
+                    snap_opt_v2(&mut tb.bottom_right, gx, gy);
+                }
+                (m.encode_to_vec(), true)
+            }
+            ItemKind::Zone
+            | ItemKind::Dimension
+            | ItemKind::Field
+            | ItemKind::Group
+            | ItemKind::ReferenceImage
+            | ItemKind::Unknown(_) => (Vec::new(), false),
+        };
+        if mutated {
+            self.raw.value = new_bytes;
+        }
+        Ok(mutated)
+    }
+
     /// Builds a new `Group` item wrapping the given member KIIDs.
     ///
     /// The returned `Item` has no `id` set, so `CreateItems` assigns a
@@ -304,6 +379,102 @@ pub fn type_url_for(kind: &ItemKind) -> String {
 
 fn decode_err(e: prost::DecodeError) -> KiCadError {
     KiCadError::ProtobufDecode(e.to_string())
+}
+
+#[inline]
+fn snap_coord(v: i64, grid: i64) -> i64 {
+    if grid <= 0 { return v; }
+    let q = v.div_euclid(grid);
+    let r = v.rem_euclid(grid);
+    if r * 2 >= grid { (q + 1) * grid } else { q * grid }
+}
+
+fn snap_opt_v2(
+    v: &mut Option<crate::proto::kiapi::common::types::Vector2>,
+    gx: i64,
+    gy: i64,
+) {
+    if let Some(p) = v.as_mut() {
+        p.x_nm = snap_coord(p.x_nm, gx);
+        p.y_nm = snap_coord(p.y_nm, gy);
+    }
+}
+
+fn snap_graphic_shape(
+    shape: &mut crate::proto::kiapi::common::types::GraphicShape,
+    gx: i64,
+    gy: i64,
+) {
+    use crate::proto::kiapi::common::types::graphic_shape::Geometry;
+    use crate::proto::kiapi::common::types::poly_line_node::Geometry as NodeGeom;
+    if let Some(geo) = shape.geometry.as_mut() {
+        match geo {
+            Geometry::Segment(s) => {
+                snap_opt_v2(&mut s.start, gx, gy);
+                snap_opt_v2(&mut s.end, gx, gy);
+            }
+            Geometry::Rectangle(r) => {
+                snap_opt_v2(&mut r.top_left, gx, gy);
+                snap_opt_v2(&mut r.bottom_right, gx, gy);
+            }
+            Geometry::Arc(a) => {
+                snap_opt_v2(&mut a.start, gx, gy);
+                snap_opt_v2(&mut a.mid, gx, gy);
+                snap_opt_v2(&mut a.end, gx, gy);
+            }
+            Geometry::Circle(c) => {
+                snap_opt_v2(&mut c.center, gx, gy);
+                snap_opt_v2(&mut c.radius_point, gx, gy);
+            }
+            Geometry::Polygon(polyset) => {
+                for poly in polyset.polygons.iter_mut() {
+                    if let Some(outline) = poly.outline.as_mut() {
+                        snap_polyline_nodes(&mut outline.nodes, gx, gy);
+                    }
+                    for h in poly.holes.iter_mut() {
+                        snap_polyline_nodes(&mut h.nodes, gx, gy);
+                    }
+                }
+            }
+            Geometry::Bezier(b) => {
+                snap_opt_v2(&mut b.start, gx, gy);
+                snap_opt_v2(&mut b.control1, gx, gy);
+                snap_opt_v2(&mut b.control2, gx, gy);
+                snap_opt_v2(&mut b.end, gx, gy);
+            }
+        }
+    }
+
+    fn snap_polyline_nodes(
+        nodes: &mut [crate::proto::kiapi::common::types::PolyLineNode],
+        gx: i64,
+        gy: i64,
+    ) {
+        for node in nodes.iter_mut() {
+            if let Some(g) = node.geometry.as_mut() {
+                match g {
+                    NodeGeom::Point(p) => {
+                        p.x_nm = snap_coord(p.x_nm, gx);
+                        p.y_nm = snap_coord(p.y_nm, gy);
+                    }
+                    NodeGeom::Arc(a) => {
+                        if let Some(p) = a.start.as_mut() {
+                            p.x_nm = snap_coord(p.x_nm, gx);
+                            p.y_nm = snap_coord(p.y_nm, gy);
+                        }
+                        if let Some(p) = a.mid.as_mut() {
+                            p.x_nm = snap_coord(p.x_nm, gx);
+                            p.y_nm = snap_coord(p.y_nm, gy);
+                        }
+                        if let Some(p) = a.end.as_mut() {
+                            p.x_nm = snap_coord(p.x_nm, gx);
+                            p.y_nm = snap_coord(p.y_nm, gy);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn unsupported(op: &str, kind: ItemKind) -> KiCadError {
